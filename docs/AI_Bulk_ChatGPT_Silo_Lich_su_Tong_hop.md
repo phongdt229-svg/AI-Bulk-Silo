@@ -1,6 +1,6 @@
 # AI Bulk ChatGPT Silo — Hồ sơ phát triển và đặc tả tổng hợp
 
-> Cập nhật: 13/10/2026. Tổng hợp từ các tệp PHP/ZIP hiện có trong phiên làm việc và yêu cầu phát triển trong cuộc trò chuyện; bổ sung phân chia Free/Pro, bảng gói từ aibulksilo.com và tiêu chuẩn bảo mật (mục 12). Tài liệu không thay thế kiểm thử thực tế trên WordPress.
+> Cập nhật: 13/10/2026. Tổng hợp từ các tệp PHP/ZIP hiện có trong phiên làm việc và yêu cầu phát triển trong cuộc trò chuyện; bổ sung phân chia Free/Pro, bảng gói từ aibulksilo.com tiêu chuẩn bảo mật (mục 12), phân tích mã nguồn v6.1.1 (mục 13) và thiết kế bản làm mới v7.0.0 (mục 14). Tài liệu không thay thế kiểm thử thực tế trên WordPress.
 
 ## 1. Tổng quan
 
@@ -8,6 +8,7 @@
 - **Mục tiêu:** tự động hóa viết bài SEO hàng loạt bằng OpenAI cho WordPress, hình ảnh, silo/internal link, SEO metadata và quản lý hạn mức license.
 - **Phiên bản phân phối:** **Free** (1 domain, 1 bài/ngày) và **Pro** (hạn mức theo gói mua tại aibulksilo.com) — xem mục 7.
 - **Mã nguồn sớm nhất tìm được:** `ai-bulk-chatgpt-silo_v4.2_overwrite.php` (v4.2). Không có đầy đủ mã nguồn của các bản v1.x–v4.1 trong tài liệu hiện có, vì vậy không thể khẳng định lịch sử chức năng của các phiên bản đó.
+- **Mã nguồn đọc trực tiếp được:** v6.1.1 tại `docs/ai-bulk-chatgpt-silo/` (xem mục 13). Bản làm mới v7.0.0 thiết kế ở mục 14.
 - **Các gói ZIP có thể đối chiếu:** v5.0.0–v6.2.0, bao gồm nhánh v6.1.1 caption/ALT.
 - **Lưu ý nhánh phiên bản:** ZIP v6.2.0 được xây dựng từ nhánh v6.1.0, trong khi tính năng caption/ALT được thêm riêng ở v6.1.1; không nên mặc định v6.2.0 đã bao gồm caption/ALT.
 
@@ -239,7 +240,190 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 - [ ] Thử nội dung AI chứa `<script>` / link `javascript:`; phải bị lọc.
 - [ ] Gỡ plugin trên staging; xác nhận dữ liệu bí mật đã bị xóa.
 
-## 13. Khuyến nghị phát triển tiếp
+## 13. Phân tích mã nguồn v6.1.1 (đọc trực tiếp)
+
+> Nguồn: `docs/ai-bulk-chatgpt-silo/ai-bulk-chatgpt-silo.php`, header `Version: 6.1.1`, 1 file, 2.413 dòng. Các số dòng bên dưới thuộc file này. Phần này là kết quả đọc mã tĩnh, chưa chạy thử trên WordPress.
+
+### 13.1. Thông tin chung
+
+- Lớp duy nhất `AI_Bulk_ChatGPT_Silo`, khởi tạo ở cuối file.
+- Máy chủ license cố định: `https://famemedia.vn/licenses/license-api.php` (dòng 29).
+- Menu (quyền `manage_options`): **AI Bulk Silo**, **Cài đặt tạo hình ảnh**, **Quét ảnh** và trang ẩn **Tạo ảnh sau khi viết** (`abcgs-after-writing-images`).
+- Giá trị mặc định: model `gpt-6-luna` (nhưng nhiều chỗ fallback `gpt-4.1-mini`), 1.200 từ, mật độ 5%, `vi`, tone `neutral`, kiểu `general_guide`, ảnh `gpt-image-1` 1536x1024 `medium` `webp`, nén ảnh dưới 1 MB và thu về rộng 1.200px.
+- Model GPT-5/GPT-6 gọi **Responses API** (`reasoning.effort = low`), các model khác gọi **Chat Completions** (`temperature 0.7`).
+- Ngôn ngữ bài: `vi`, `en`, `zh`. Tone: `neutral`, `friendly`, `formal`, `expert`, `promotional`, `journalistic`, `storytelling`. Kiểu bài: `general_guide`, `news_article`, `product_description`, `product_review`, `comparison`, `how_to`, `listicle`.
+- Quy tắc nội dung cứng trong prompt: tiêu đề đúng 12 từ và khác từ khóa; không dùng dấu `-`; không nêu giá; không kể chuyện cá nhân; không cam kết; không FAQ; in đậm mọi lần xuất hiện từ khóa chính; chỉ dùng `h2, h3, p, ul, li`.
+
+### 13.2. Luồng thực tế
+
+1. **Bắt đầu:** form trang chính gửi đồng thời API key, cấu hình bài, cấu hình SEO, license và danh sách từ khóa. Plugin gọi `validate` lên máy chủ license, lưu toàn bộ cấu hình, **ghi đè** queue cũ bằng queue mới, hẹn cron sau 5 giây.
+2. **Mỗi lượt cron xử lý 1 bài:** dựng prompt → gọi OpenAI → kiểm tra ngôn ngữ, sai thì gọi lại 1 lần → bỏ code fence → lấy tiêu đề → đổi `h1` thành `h2` → lọc HTML bằng `wp_kses` → excerpt 40 từ → slug theo từ khóa → `wp_insert_post` → ghi meta SEO → gọi `consume` lên máy chủ license.
+3. **Khi hết bài Pending:** lưu danh sách bài vừa viết, hiện thông báo hỏi có tạo ảnh không, rồi gắn liên kết silo.
+4. **Silo:** từ khóa dòng 1 là bài trụ cột. Bài trụ cột link sang bài 2; mỗi bài con link sang bài kế tiếp và về bài trụ cột. Khối `<div class="silo-links">` được thay thế nếu chạy lại.
+5. **Ảnh:** chỉ tạo khi người dùng xác nhận. Người dùng chọn N ảnh mỗi bài; plugin chèn ảnh sau N thẻ H2/H3 đầu tiên (đánh dấu `<!-- ABCGS_HEADING_IMAGE_n -->`), dạng `figure > img[alt] + figcaption`, và tạo ảnh đại diện cho bài chưa có. Queue ảnh chạy bằng cron hoặc vòng lặp AJAX trên trình duyệt.
+6. Hai ô “Tự động tạo ảnh” ở trang Cài đặt ảnh **không còn tác dụng**: luồng viết bài đặt thẳng công đoạn `done`, nên công đoạn `inline`/`featured` trong queue bài không bao giờ chạy.
+
+### 13.3. Hợp đồng license API đang dùng
+
+Plugin gửi `POST` dạng form tới `license-api.php`:
+
+| Trường | Giá trị |
+|---|---|
+| `action` | `validate` hoặc `consume` |
+| `serial`, `email` | Serial Key và email mua hàng |
+| `domain` | Host của `site_url()`, đã bỏ `www.`, bỏ cổng, chữ thường |
+| `site_url` | `site_url()` đầy đủ |
+| `count` | Chỉ với `consume`, mặc định 1 |
+
+Phản hồi JSON thành công: `{"status":"ok","plan":"...","max_posts":N,"used_posts":N}`. Thất bại: `status` khác `ok`, kèm `code`, `message` và có thể kèm `expected_domain`, `received_domain`, `expected_email`, `received_email`.
+
+License hiện tại gắn **1 serial + 1 email + 1 domain**, hạn mức tính theo **tổng số bài** (không theo ngày). Mã nguồn không có chế độ Free.
+
+### 13.4. Lỗi xác nhận trong mã
+
+| # | Mức | Dòng | Lỗi |
+|---|---|---|---|
+| 1 | Cao | 978–999, 1946–1959 | Lưu và đăng bài trước, trừ quota sau. Nếu gọi `consume` lỗi mạng/HTTP, plugin bỏ qua im lặng: bài vẫn đăng mà không bị trừ quota. |
+| 2 | Cao | 902–905, 929 | Trong cron, hạn mức kiểm tra bằng option `abcgs_license` lưu trên site. Sửa option này trong database là vượt giới hạn. |
+| 3 | Cao | 875 | `process_queue` không có khóa. Cron và nút “Xử lý ngay 1 bài” chạy cùng lúc có thể tạo bài trùng và trừ quota hai lần. |
+| 4 | Cao | 41, 523–529 | Hook `save_post_post` ghi lại SEO Title/Description/Focus Keyword **mỗi lần lưu bài**, ghi đè chỉnh sửa tay; cũng chạy mỗi khi plugin chèn ảnh hoặc silo. |
+| 5 | Cao | 1884–1891 | Plugin in ra `expected_email`/`expected_domain` từ máy chủ. Nghĩa là máy chủ license đang trả email của chủ license cho người nhập sai, làm lộ thông tin khách hàng. |
+| 6 | TB | 757–758 | Bấm tạo bài lần mới sẽ ghi đè queue đang chạy, mất trạng thái các bài dở dang. |
+| 7 | TB | 240 | API key được in lại vào thuộc tính `value` của ô mật khẩu, nằm trong HTML trang quản trị. |
+| 8 | TB | 719 | Cấu hình chỉ được lưu khi bấm tạo bài (bắt buộc có từ khóa và license hợp lệ); không có nút lưu riêng. |
+| 9 | TB | 983 | `post_author = get_current_user_id()` chạy trong cron trả về 0, bài không có tác giả. |
+| 10 | TB | 971–974, 1409–1431 | Tiêu đề lấy từ dòng đầu của nội dung nhưng dòng đó không bị xóa, nên tiêu đề có thể lặp ở đầu bài (cần đối chiếu bài thực tế). |
+| 11 | TB | 1173 | Chuỗi `"\\n"` trong nháy kép làm prompt tiếng Việt chứa ký tự `\n` theo nghĩa đen. |
+| 12 | TB | 1080–1090, 1467 | Nếu bài trụ cột (dòng 1) lỗi, bài con đầu tiên bị coi là trụ cột. |
+| 13 | TB | 502–507 | Lựa chọn “Rank Math / Yoast / Tự phát hiện” không có tác dụng: luôn ghi cả hai, trừ khi chọn “Không điền”. |
+| 14 | TB | 2323–2324 | Khóa queue ảnh bằng transient đọc-rồi-ghi, không nguyên tử. |
+| 15 | TB | 912 | Bài lỗi chuyển `error` và không có nút thử lại. |
+| 16 | Thấp | 32–33 | `set_time_limit(300)` chạy trong constructor, ảnh hưởng mọi request WordPress. |
+| 17 | Thấp | 66 | `add_submenu_page(null, …)` gây cảnh báo deprecated trên PHP 8.1+. |
+| 18 | Thấp | 1757 | Ảnh trả về dạng URL được tải bằng `wp_remote_get` (không chặn IP nội bộ) và không kiểm tra MIME thật. |
+| 19 | Thấp | 2258 | Quét ảnh tải toàn bộ bài (`posts_per_page = -1`) và lưu tiêu đề vào option. |
+| 20 | Thấp | 169–179 | Nội dung thông báo lấy từ tham số URL, có thể bị giả mạo câu chữ (đã escape, không gây XSS). |
+| 21 | Thấp | — | Không có `uninstall.php`, không khai báo `Requires PHP`/`Requires at least`; option queue và settings tự nạp (autoload) mọi request. |
+| 22 | Thấp | 25, 1555, 1027–1053 | Mã chết: `INLINE_MARKER`, `get_second_h2_context()`, công đoạn `inline`/`featured` của queue bài. |
+
+## 14. Thiết kế bản làm mới v7.0.0
+
+### 14.1. Phạm vi
+
+- **Có:** giữ toàn bộ chức năng v6.1.1 (mục 13), thêm Free/Pro (mục 7), sửa 22 lỗi ở mục 13.4, áp dụng tiêu chuẩn bảo mật mục 12.
+- **Không có trong v7.0.0:** 8 module của nhánh v6.2.0 (không có mã nguồn để đối chiếu). Có thể bổ sung ở bản sau.
+- **Tương thích ngược:** giữ nguyên tên option, cron hook, meta bài viết, marker ảnh và class CSS `silo-links`. Cài đè lên v6.1.1 không mất dữ liệu; API key cũ được chuyển sang kho bí mật mã hóa khi nâng cấp.
+- Yêu cầu: PHP 7.4+, WordPress 5.8+.
+- Mã nguồn: thư mục `ai-bulk-chatgpt-silo/` ở gốc repo. Bản v6.1.1 giữ nguyên trong `docs/` để đối chiếu.
+
+### 14.2. Cấu trúc mã
+
+```
+ai-bulk-chatgpt-silo/
+├── ai-bulk-chatgpt-silo.php        Header, hằng số, nạp file, hook kích hoạt
+├── uninstall.php                   Xóa option, khóa, cron, bí mật khi gỡ
+├── includes/
+│   ├── class-abcgs-plugin.php      Đăng ký hook, menu, thông báo, nâng cấp dữ liệu
+│   ├── class-abcgs-settings.php    Giá trị mặc định, whitelist, đọc/ghi cấu hình
+│   ├── class-abcgs-secrets.php     Lưu API key/serial mã hóa (sodium), hỗ trợ hằng số wp-config
+│   ├── class-abcgs-lock.php        Khóa nguyên tử bằng add_option + hạn khóa
+│   ├── class-abcgs-license.php     Free/Pro, gọi máy chủ license, fail-closed
+│   ├── class-abcgs-openai.php      Gọi Responses/Chat Completions và Images API
+│   ├── class-abcgs-prompts.php     Prompt bài viết và prompt ảnh
+│   ├── class-abcgs-content.php     Xử lý HTML AI: tiêu đề, lọc, excerpt, kiểm tra ngôn ngữ
+│   ├── class-abcgs-seo.php         Ghi meta Rank Math/Yoast, chỉ điền ô trống
+│   ├── class-abcgs-silo.php        Gắn liên kết silo
+│   ├── class-abcgs-images.php      Tạo ảnh, kiểm tra MIME, nén, chèn figure
+│   ├── class-abcgs-queue.php       Queue bài viết (cron, retry, hủy)
+│   └── class-abcgs-image-queue.php Queue ảnh, quét ảnh
+└── admin/views/                    Giao diện các trang quản trị
+```
+
+### 14.3. Trang quản trị
+
+| Trang | Nội dung |
+|---|---|
+| **AI Bulk Silo** | Trạng thái license (Free/Pro, còn bao nhiêu bài), form viết bài (từ khóa, chuyên mục, trạng thái, ngôn ngữ, tone, kiểu bài, độ dài, mật độ, SEO), bảng queue có nút Thử lại / Hủy / Dọn mục đã xong |
+| **Cài đặt chung** | OpenAI API key (chỉ hiện dạng che), model, hồ sơ lĩnh vực website + nút tự phân tích. Lưu độc lập, không cần chạy queue |
+| **License** | Chọn Free (nhập email) hoặc Pro (nhập Serial Key + email), kiểm tra, xóa license khỏi site |
+| **Cài đặt tạo hình ảnh** | Như v6.1.1, bỏ hai ô không còn tác dụng |
+| **Quét ảnh** | Như v6.1.1, quét theo lô giới hạn |
+| *(ẩn)* **Tạo ảnh sau khi viết** | Như v6.1.1 |
+
+### 14.4. Luồng tạo bài v7
+
+1. Bấm tạo bài **thêm** từ khóa vào queue (không ghi đè). Mỗi mục lưu `author_id`, ngôn ngữ, mã đợt (`batch_id`) để gắn silo đúng đợt.
+2. Mỗi lượt cron lấy khóa nguyên tử, xử lý 1 mục, nhả khóa.
+3. **Hỏi máy chủ license còn quota không** (trước khi tốn phí OpenAI).
+   - Pro hết bài → mục chuyển `error` “Hết số bài của gói”.
+   - Free đã dùng 1 bài hôm nay → mục chuyển `waiting_quota`, hẹn chạy lại lúc `reset_at` máy chủ trả về (không có thì sang ngày mới theo giờ site).
+   - Máy chủ không phản hồi → mục chờ và thử lại sau 10 phút (**fail-closed**: không viết bài khi chưa xác nhận được quota).
+4. Gọi OpenAI viết bài, kiểm tra ngôn ngữ, xử lý HTML.
+5. **Gọi `consume` trước khi đăng.** Thành công mới `wp_insert_post`. Thất bại thì giữ nội dung đã viết trong mục queue để thử lại, không tốn phí OpenAI lần hai.
+6. Ghi meta SEO (chỉ điền ô trống), lưu meta plugin.
+7. Khi một đợt hoàn tất: gắn silo cho các bài của đợt đó (bài trụ cột lỗi thì bỏ qua silo và báo rõ), rồi hỏi tạo ảnh như v6.1.1.
+
+### 14.5. Free và Pro trong plugin
+
+| | Free | Pro |
+|---|---|---|
+| Thông tin nhập | Email | Serial Key + email |
+| Hạn mức | Máy chủ đếm 1 bài/ngày/domain | Máy chủ đếm theo tổng số bài của gói |
+| Ràng buộc domain | 1 email ↔ 1 domain; mỗi domain chỉ 1 đăng ký Free | Như hiện tại (serial gắn domain) |
+| Tính năng | Như Pro, chỉ khác hạn mức (cần xác nhận) | Đầy đủ |
+| Khi hết hạn mức | Chờ sang ngày mới, tự chạy tiếp | Dừng, báo mua hoặc gia hạn gói |
+
+### 14.6. Hợp đồng license API v2 (tương thích ngược)
+
+Plugin v7 giữ nguyên `validate`/`consume` và các trường của mục 13.3, thêm:
+
+| Trường mới | Ý nghĩa |
+|---|---|
+| `edition` | `pro` (mặc định, như hiện tại) hoặc `free`. Với `free`, `serial` để trống |
+| `plugin_version` | Phiên bản plugin, phục vụ thống kê và chặn bản quá cũ |
+
+Phản hồi thêm (nếu có): `edition`, `daily_limit`, `used_today`, `reset_at` (Unix timestamp). Mã lỗi plugin xử lý riêng: `QUOTA_EXCEEDED`, `DAILY_LIMIT`, `FREE_DOMAIN_TAKEN`, `FREE_EMAIL_USED`.
+
+**Việc máy chủ license phải làm** (ngoài phạm vi plugin, chưa có mã nguồn máy chủ):
+
+1. Hỗ trợ `edition=free`: đăng ký email + domain, đếm bài theo ngày, trả `reset_at`.
+2. **Ngừng trả** `expected_email`, `expected_domain` trong phản hồi lỗi (lỗi #5 mục 13.4).
+3. `consume` phải nguyên tử (không trừ vượt `max_posts` khi có 2 yêu cầu đồng thời).
+4. Giai đoạn 2: ký phản hồi (mục 12.6). Plugin v7 đã có chỗ kiểm chữ ký, bật khi khai báo hằng số `ABCGS_LICENSE_PUBLIC_KEY` trong `wp-config.php`.
+
+Cho tới khi máy chủ hỗ trợ `edition=free`, chế độ Free sẽ báo lỗi từ máy chủ. Pro hoạt động ngay với máy chủ hiện tại.
+
+### 14.7. Cách v7 xử lý 22 lỗi của mục 13.4
+
+| Lỗi | Cách xử lý |
+|---|---|
+| 1, 2 | Hỏi quota trước, `consume` trước khi đăng, fail-closed; không dùng số liệu cục bộ để quyết định |
+| 3, 14 | Khóa nguyên tử `add_option` có hạn khóa cho cả queue bài và queue ảnh |
+| 4, 13 | Bỏ ghi đè khi lưu bài; chỉ điền ô SEO trống; tôn trọng lựa chọn Rank Math/Yoast/Tự phát hiện; nút đồng bộ có tùy chọn ghi đè |
+| 5 | Không hiển thị email/domain mong đợi; yêu cầu máy chủ ngừng trả |
+| 6 | Queue thêm vào thay vì ghi đè; có nút dọn mục đã xong |
+| 7 | API key không bao giờ in ra HTML, chỉ hiện dạng `sk-…abcd`; để trống là giữ key cũ |
+| 8 | Trang Cài đặt chung lưu độc lập |
+| 9 | Lưu `author_id` lúc xếp hàng |
+| 10 | Yêu cầu AI đặt tiêu đề trong `<h1>`, plugin tách ra làm tiêu đề và xóa khỏi nội dung |
+| 11 | Sửa chuỗi xuống dòng |
+| 12 | Silo theo `batch_id`, bỏ qua và báo lỗi khi bài trụ cột lỗi |
+| 15 | Nút Thử lại theo đúng công đoạn lỗi |
+| 16 | Chỉ nâng thời gian chạy trong worker |
+| 17 | Trang ẩn đăng ký với parent rỗng thay vì `null` |
+| 18 | `wp_safe_remote_get`, kiểm tra MIME bằng `getimagesizefromstring`, chỉ nhận JPEG/PNG/WebP |
+| 19 | Quét tối đa 1.000 bài gần nhất mỗi lượt, chỉ lưu ID và cờ |
+| 20 | Thông báo lưu tạm theo người dùng, không lấy từ URL |
+| 21 | Có `uninstall.php`, khai báo yêu cầu phiên bản, option lớn tắt autoload |
+| 22 | Bỏ mã chết |
+
+### 14.8. Còn phụ thuộc bên ngoài
+
+- Máy chủ license cập nhật theo 14.6 (cần mã nguồn `license-api.php` để làm).
+- 5 câu hỏi về gói Pro ở mục 7.2.
+- Bản Free có bị giới hạn tính năng ngoài hạn mức không (ví dụ khóa tạo ảnh)? v7.0.0 tạm cho Free dùng đủ tính năng.
+
+## 15. Khuyến nghị phát triển tiếp
 
 1. Hợp nhất v6.1.1 caption/ALT vào nhánh suite sau khi so sánh mã, không ghi đè mù.
 2. Xây dựng khóa queue nguyên tử, idempotency key cho mỗi từ khóa/bài và cơ chế retry theo giai đoạn.
@@ -250,7 +434,7 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 7. Xác minh manifest cập nhật và chữ ký/hash ZIP; lưu bản backup/rollback.
 8. Viết test cho: tạo bài, tạo ảnh, caption/ALT, đa ngôn ngữ, cron, license, SEO và migration phiên bản.
 
-## 14. Danh sách mã nguồn đã đối chiếu
+## 16. Danh sách mã nguồn đã đối chiếu
 
 | Tệp | Ghi chú |
 |---|---|
@@ -279,7 +463,7 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 | `license-admin.php` / `license-api.php` / `licenses.json` | Thành phần máy chủ license, tách biệt plugin WordPress |
 | `license-admin-100-posts-update.zip` | Gói cập nhật thêm gói 100 bài |
 
-## 15. Quy tắc bảo trì và phát hành
+## 17. Quy tắc bảo trì và phát hành
 
 - Luôn lấy đúng bản ZIP làm nguồn trước khi chỉnh sửa, kiểm tra các nhánh thay đổi độc lập.
 - Nâng `Version` trong header, đóng gói đúng tên thư mục plugin, kiểm tra `php -l` cho tất cả PHP.
