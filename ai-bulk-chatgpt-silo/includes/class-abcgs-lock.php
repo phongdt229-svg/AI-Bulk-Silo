@@ -74,6 +74,28 @@ class ABCGS_Lock {
 	}
 
 	/**
+	 * Đọc-sửa-ghi một option mảng dưới khóa ngắn, để worker và thao tác quản
+	 * trị không ghi đè thay đổi của nhau. $fn nhận mảng theo tham chiếu.
+	 *
+	 * @return mixed|false Giá trị $fn trả về, false nếu không lấy được khóa.
+	 */
+	public static function mutate( $option, callable $fn ) {
+		$lock = 'w_' . $option;
+		if ( ! self::acquire_wait( $lock, 30, 10 ) ) {
+			return false;
+		}
+		try {
+			$value = self::fresh_option( $option, array() );
+			$value = is_array( $value ) ? $value : array();
+			$result = $fn( $value );
+			update_option( $option, $value, false );
+			return null === $result ? true : $result;
+		} finally {
+			self::release( $lock );
+		}
+	}
+
+	/**
 	 * Đọc option bỏ qua object cache, dùng khi đang giữ khóa.
 	 */
 	public static function fresh_option( $option, $default = array() ) {
