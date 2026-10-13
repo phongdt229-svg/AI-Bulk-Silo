@@ -37,6 +37,7 @@
 | 6.1.0 | `ai-bulk-chatgpt-silo-v6.1.0-three-sections.zip` | Tổ chức giao diện thành AI Bulk Silo, Cài đặt tạo hình ảnh, Quét ảnh. | 1 |
 | 6.1.1 | `ai-bulk-chatgpt-silo-v6.1.1-image-caption-alt.zip` | Thêm figure/figcaption, thuộc tính ALT và lưu caption/ALT vào Media. | 1 |
 | 6.2.0 | `ai-bulk-chatgpt-silo-v6.2.0-suite.zip` | Nhánh suite với 8 module SEO, queue, keyword clustering, links, refresh, image SEO, GSC, license/update; không mặc định có thay đổi caption của v6.1.1. | 2 |
+| 7.0.0 | thư mục `ai-bulk-chatgpt-silo/` (chưa đóng gói ZIP) | Làm mới từ v6.1.1: Free/Pro, license fail-closed, queue có khóa và thử lại, mã hóa API key, sửa 22 lỗi ở mục 13.4. Chưa kiểm thử tích hợp trên WordPress (mục 14.9). | 17 |
 
 ### Giai đoạn trước v5.0.0
 
@@ -89,7 +90,7 @@
 | **Free** | 1 domain | 1 bài/ngày | Không cần mua gói |
 | **Pro** | Theo gói | Theo số bài của gói đã mua (bảng 7.2) | Nhập Serial Key nhận sau khi thanh toán |
 
-> Trạng thái: phân chia Free/Pro là **yêu cầu sản phẩm** (13/10/2026). Chưa đối chiếu được trong mã nguồn hiện có rằng giới hạn Free (1 domain, 1 bài/ngày) đã được triển khai.
+> Trạng thái: v6.1.1 **không có** chế độ Free (mục 13.3). v7.0.0 đã làm phía plugin (mục 14.5); máy chủ license cần bổ sung `edition=free` (mục 14.6) thì bản Free mới hoạt động.
 
 ### 7.2. Bảng gói Pro (theo [aibulksilo.com](https://aibulksilo.com/), truy cập 13/10/2026)
 
@@ -221,7 +222,7 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 
 ### 12.8. Queue, cron và chống lạm dụng
 
-- Khóa queue nguyên tử (ví dụ `add_option` trả về false nếu đã tồn tại, hoặc `GET_LOCK` MySQL) để không chạy song song làm tạo bài trùng và tiêu thụ quota hai lần.
+- Khóa queue nguyên tử (ví dụ `INSERT IGNORE` vào bảng options, hoặc `GET_LOCK` MySQL; **không** dùng `add_option` vì hàm này ghi bằng `ON DUPLICATE KEY UPDATE`) để không chạy song song làm tạo bài trùng và tiêu thụ quota hai lần.
 - Lưu `author_id` của người tạo vào từng mục queue, không dùng `get_current_user_id()` trong cron (trả về 0).
 - Giới hạn số tác vụ mỗi lượt cron và số lần retry để tránh tốn chi phí OpenAI vô hạn khi lỗi lặp lại.
 
@@ -323,10 +324,13 @@ ai-bulk-chatgpt-silo/
 ├── ai-bulk-chatgpt-silo.php        Header, hằng số, nạp file, hook kích hoạt
 ├── uninstall.php                   Xóa option, khóa, cron, bí mật khi gỡ
 ├── includes/
-│   ├── class-abcgs-plugin.php      Đăng ký hook, menu, thông báo, nâng cấp dữ liệu
+│   ├── class-abcgs-plugin.php      Khởi động, đăng ký cron, watchdog mỗi giờ
+│   ├── class-abcgs-upgrade.php     Nâng cấp dữ liệu v6 → v7
+│   ├── class-abcgs-admin.php       Menu, xử lý form (admin-post), AJAX worker ảnh
+│   ├── class-abcgs-notices.php     Thông báo lưu theo người dùng
 │   ├── class-abcgs-settings.php    Giá trị mặc định, whitelist, đọc/ghi cấu hình
 │   ├── class-abcgs-secrets.php     Lưu API key/serial mã hóa (sodium), hỗ trợ hằng số wp-config
-│   ├── class-abcgs-lock.php        Khóa nguyên tử bằng add_option + hạn khóa
+│   ├── class-abcgs-lock.php        Khóa nguyên tử INSERT IGNORE + hạn khóa; đọc-sửa-ghi option an toàn
 │   ├── class-abcgs-license.php     Free/Pro, gọi máy chủ license, fail-closed
 │   ├── class-abcgs-openai.php      Gọi Responses/Chat Completions và Images API
 │   ├── class-abcgs-prompts.php     Prompt bài viết và prompt ảnh
@@ -336,7 +340,7 @@ ai-bulk-chatgpt-silo/
 │   ├── class-abcgs-images.php      Tạo ảnh, kiểm tra MIME, nén, chèn figure
 │   ├── class-abcgs-queue.php       Queue bài viết (cron, retry, hủy)
 │   └── class-abcgs-image-queue.php Queue ảnh, quét ảnh
-└── admin/views/                    Giao diện các trang quản trị
+└── admin/views/                    main, general, license, images, after-writing, scan, notice-images, partials/image-worker
 ```
 
 ### 14.3. Trang quản trị
@@ -381,6 +385,8 @@ Plugin v7 giữ nguyên `validate`/`consume` và các trường của mục 13.3
 |---|---|
 | `edition` | `pro` (mặc định, như hiện tại) hoặc `free`. Với `free`, `serial` để trống |
 | `plugin_version` | Phiên bản plugin, phục vụ thống kê và chặn bản quá cũ |
+| `idempotency_key` | Chỉ với `consume`: id mục queue. Máy chủ nên bỏ qua lần trừ thứ hai cùng khóa (plugin gửi lại khi mất phản hồi) |
+| `nonce` | Chuỗi ngẫu nhiên mỗi yêu cầu; máy chủ trả lại trong JSON khi ký phản hồi |
 
 Phản hồi thêm (nếu có): `edition`, `daily_limit`, `used_today`, `reset_at` (Unix timestamp). Mã lỗi plugin xử lý riêng: `QUOTA_EXCEEDED`, `DAILY_LIMIT`, `FREE_DOMAIN_TAKEN`, `FREE_EMAIL_USED`.
 
@@ -389,7 +395,8 @@ Phản hồi thêm (nếu có): `edition`, `daily_limit`, `used_today`, `reset_a
 1. Hỗ trợ `edition=free`: đăng ký email + domain, đếm bài theo ngày, trả `reset_at`.
 2. **Ngừng trả** `expected_email`, `expected_domain` trong phản hồi lỗi (lỗi #5 mục 13.4).
 3. `consume` phải nguyên tử (không trừ vượt `max_posts` khi có 2 yêu cầu đồng thời).
-4. Giai đoạn 2: ký phản hồi (mục 12.6). Plugin v7 đã có chỗ kiểm chữ ký, bật khi khai báo hằng số `ABCGS_LICENSE_PUBLIC_KEY` trong `wp-config.php`.
+4. Bỏ qua `consume` trùng `idempotency_key` (tránh trừ hai lần khi plugin gửi lại).
+5. Giai đoạn 2: ký phản hồi (mục 12.6). Máy chủ ký Ed25519 **toàn bộ thân phản hồi**, gửi chữ ký base64 ở header `X-ABCGS-Signature`, và đưa `nonce` (trả lại từ yêu cầu) + `ts` (Unix time) vào JSON. Plugin v7 đã kiểm chữ ký, nonce và độ lệch thời gian ≤ 300 giây khi khai báo hằng số `ABCGS_LICENSE_PUBLIC_KEY` (khóa công khai base64) trong `wp-config.php`.
 
 Cho tới khi máy chủ hỗ trợ `edition=free`, chế độ Free sẽ báo lỗi từ máy chủ. Pro hoạt động ngay với máy chủ hiện tại.
 
@@ -398,7 +405,7 @@ Cho tới khi máy chủ hỗ trợ `edition=free`, chế độ Free sẽ báo l
 | Lỗi | Cách xử lý |
 |---|---|
 | 1, 2 | Hỏi quota trước, `consume` trước khi đăng, fail-closed; không dùng số liệu cục bộ để quyết định |
-| 3, 14 | Khóa nguyên tử `add_option` có hạn khóa cho cả queue bài và queue ảnh |
+| 3, 14 | Khóa nguyên tử `INSERT IGNORE` có hạn khóa cho cả queue bài và queue ảnh; mọi thay đổi queue đi qua đọc-sửa-ghi có khóa; bài đăng gắn `_abcgs_queue_item_id` để không đăng trùng khi chạy lại |
 | 4, 13 | Bỏ ghi đè khi lưu bài; chỉ điền ô SEO trống; tôn trọng lựa chọn Rank Math/Yoast/Tự phát hiện; nút đồng bộ có tùy chọn ghi đè |
 | 5 | Không hiển thị email/domain mong đợi; yêu cầu máy chủ ngừng trả |
 | 6 | Queue thêm vào thay vì ghi đè; có nút dọn mục đã xong |
@@ -417,7 +424,20 @@ Cho tới khi máy chủ hỗ trợ `edition=free`, chế độ Free sẽ báo l
 | 21 | Có `uninstall.php`, khai báo yêu cầu phiên bản, option lớn tắt autoload |
 | 22 | Bỏ mã chết |
 
-### 14.8. Còn phụ thuộc bên ngoài
+### 14.8. Cấu hình bằng hằng số (tùy chọn, trong `wp-config.php`)
+
+| Hằng số | Tác dụng |
+|---|---|
+| `ABCGS_OPENAI_API_KEY` | API key OpenAI, không lưu vào database |
+| `ABCGS_LICENSE_SERIAL` | Serial Key Pro, không lưu vào database |
+| `ABCGS_LICENSE_PUBLIC_KEY` | Bật kiểm chữ ký phản hồi license (mục 14.6) |
+
+### 14.9. Trạng thái kiểm thử v7.0.0
+
+- **Đã chạy:** `php -l` toàn bộ 31 file (PHP 8.2) không lỗi; 52 kiểm thử logic chạy với hàm thật của WordPress 7.0 (formatting, kses), stub phần database/HTTP: tách tiêu đề, lọc HTML độc, kiểm tra ngôn ngữ, prompt, SEO chỉ điền ô trống, whitelist cấu hình, mã hóa/giải mã API key, các nhánh Free/Pro/lỗi mạng/không lộ `expected_email` của license. Kết quả 52/52 đạt.
+- **Chưa chạy:** kích hoạt trên WordPress thật, queue qua WP-Cron, khóa với MySQL, gọi OpenAI thật, tạo ảnh, nâng cấp từ dữ liệu v6.1.1 thật, gọi máy chủ license thật.
+
+### 14.10. Còn phụ thuộc bên ngoài
 
 - Máy chủ license cập nhật theo 14.6 (cần mã nguồn `license-api.php` để làm).
 - 5 câu hỏi về gói Pro ở mục 7.2.
@@ -462,6 +482,7 @@ Cho tới khi máy chủ hỗ trợ `edition=free`, chế độ Free sẽ báo l
 | `ai-bulk-chatgpt-silo_v4.2_overwrite.php` | Tệp PHP nhánh v4.2 |
 | `license-admin.php` / `license-api.php` / `licenses.json` | Thành phần máy chủ license, tách biệt plugin WordPress |
 | `license-admin-100-posts-update.zip` | Gói cập nhật thêm gói 100 bài |
+| `docs/ai-bulk-chatgpt-silo/ai-bulk-chatgpt-silo.php` | v6.1.1, 2.413 dòng, đọc trực tiếp (mục 13) |
 
 ## 17. Quy tắc bảo trì và phát hành
 
