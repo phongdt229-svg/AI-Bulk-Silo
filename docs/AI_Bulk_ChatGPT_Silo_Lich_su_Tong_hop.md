@@ -1,6 +1,6 @@
 # AI Bulk ChatGPT Silo — Hồ sơ phát triển và đặc tả tổng hợp
 
-> Cập nhật: 13/10/2026. Tổng hợp từ các tệp PHP/ZIP hiện có trong phiên làm việc và yêu cầu phát triển trong cuộc trò chuyện; bổ sung phân chia Free/Pro và bảng gói từ aibulksilo.com. Tài liệu không thay thế kiểm thử thực tế trên WordPress.
+> Cập nhật: 13/10/2026. Tổng hợp từ các tệp PHP/ZIP hiện có trong phiên làm việc và yêu cầu phát triển trong cuộc trò chuyện; bổ sung phân chia Free/Pro, bảng gói từ aibulksilo.com và tiêu chuẩn bảo mật (mục 12). Tài liệu không thay thế kiểm thử thực tế trên WordPress.
 
 ## 1. Tổng quan
 
@@ -164,7 +164,82 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 
 **Phạm vi đánh giá:** những vấn đề trên là phát hiện/nhận định từ kiểm tra tĩnh và các lượt rà soát trước. Chưa có báo cáo kiểm thử tích hợp WordPress thực tế, tải lớn, kiểm thử bảo mật độc lập hoặc đối soát máy chủ license.
 
-## 12. Khuyến nghị phát triển tiếp
+## 12. Bảo mật plugin WordPress
+
+> Đây là **tiêu chuẩn bảo mật bắt buộc** cho các bản phát hành từ nay. Chưa rà soát lại toàn bộ mã nguồn v5.0.0–v6.2.0 theo danh sách này, nên chưa được coi các mục dưới đây là đã đạt.
+
+### 12.1. Phân quyền và chống CSRF
+
+- Mọi trang quản trị, thao tác AJAX (`wp_ajax_*`) và REST route phải kiểm tra `current_user_can()`: `manage_options` cho cấu hình, API key, license, GSC; `edit_posts` (hoặc quyền riêng) cho tạo bài/tạo ảnh.
+- Không đăng ký `wp_ajax_nopriv_*` cho các tác vụ tạo bài, tạo ảnh, quét, license.
+- Mọi form và AJAX phải có nonce: `wp_nonce_field()` / `check_admin_referer()` / `check_ajax_referer()`. REST route phải khai báo `permission_callback`, không được dùng `__return_true` cho route có ghi dữ liệu.
+- Thao tác hàng loạt (xóa queue, retry, ghi đè SEO, chèn link) cần xác nhận trước khi chạy và ghi nhật ký người thực hiện.
+
+### 12.2. Kiểm tra đầu vào và escape đầu ra
+
+- Làm sạch đầu vào theo kiểu dữ liệu: `sanitize_text_field`, `sanitize_textarea_field`, `absint`, `esc_url_raw`, `sanitize_key`; giới hạn giá trị theo whitelist cho `language`, `tone`, `article_style`, `post_status`, model, kích thước ảnh.
+- Giới hạn số lượng từ khóa mỗi lần gửi và độ dài mỗi từ khóa để tránh làm phình `abcgs_queue`.
+- Escape mọi đầu ra trong trang quản trị: `esc_html`, `esc_attr`, `esc_url`, `esc_textarea`; dùng `wp_json_encode` khi đưa dữ liệu vào JavaScript.
+- Nội dung AI trả về coi là **không tin cậy**: lọc bằng `wp_kses_post()` trước khi lưu, loại `<script>`, `<iframe>`, `on*=`, `javascript:` (phòng prompt injection chèn mã độc vào bài).
+- Truy vấn SQL trực tiếp phải dùng `$wpdb->prepare()`.
+
+### 12.3. Bảo vệ API key và token
+
+- OpenAI API key, license key, token GSC: không hiển thị lại đầy đủ trên giao diện (chỉ hiện dạng `sk-****abcd`), không đưa ra HTML/JS phía trình duyệt, không ghi vào log.
+- Cho phép khai báo key bằng hằng số trong `wp-config.php` (ví dụ `ABCGS_OPENAI_KEY`) để không lưu key trong database.
+- Option chứa bí mật đặt `autoload = no`. Có thể mã hóa giá trị trước khi lưu bằng khóa dẫn xuất từ `AUTH_KEY`/`SECURE_AUTH_KEY` (giảm rủi ro khi lộ bản dump database, không thay thế bảo vệ máy chủ).
+- Khi gỡ plugin (`uninstall.php`): xóa key, token, license và các option/cron của plugin.
+
+### 12.4. Gọi API ngoài và chống SSRF
+
+- Chỉ dùng `wp_remote_get/post` với `sslverify = true` và timeout hợp lý; không tắt kiểm tra SSL.
+- Chức năng phân tích website và tải ảnh từ URL chỉ được gọi tới domain của chính site hoặc host trong whitelist (OpenAI, máy chủ license, Google); dùng `wp_safe_remote_get()` để chặn IP nội bộ/localhost.
+- Không dùng dữ liệu người dùng để tạo URL gọi API mà không kiểm tra.
+
+### 12.5. Hình ảnh và Media
+
+- Ảnh AI trả về (base64 hoặc URL) phải được kiểm tra MIME thật bằng `wp_check_filetype_and_ext()` / `getimagesize()`, chỉ chấp nhận JPEG/PNG/WebP, giới hạn dung lượng.
+- Tên file sinh từ `sanitize_file_name()`; lưu qua `wp_upload_bits()` / `media_handle_sideload()`, không ghi file thủ công ra ngoài thư mục uploads.
+- ALT/caption lấy từ AI phải được làm sạch trước khi ghi vào attachment.
+
+### 12.6. Bảo mật license và chống vượt giới hạn Free
+
+- **Máy chủ license là nơi quyết định hạn mức**, không phải plugin. Plugin chỉ hiển thị quota; mỗi lần tạo bài phải xin "phiếu" (reserve) từ máy chủ trước, xác nhận (commit) sau khi lưu bài, hoàn lại khi lỗi. Cách này cũng xử lý rủi ro "lưu bài trước khi tiêu thụ quota" ở mục 11.
+- **Free:** máy chủ ghi nhận domain đã đăng ký và đếm số bài theo ngày (theo múi giờ máy chủ); cùng một domain không được tạo nhiều tài khoản Free. Chuẩn hóa domain (bỏ `www.`, chữ thường, bỏ cổng) trước khi so sánh.
+- **Pro:** Serial Key gắn với domain theo số lượng gói cho phép; có chức năng hủy kích hoạt để chuyển domain.
+- Phản hồi từ máy chủ license phải được **ký số** (khuyến nghị Ed25519 / `sodium_crypto_sign_verify_detached`, khóa công khai nhúng trong plugin) kèm `timestamp` và `nonce` để chống giả mạo và phát lại. Chỉ HTTPS là chưa đủ.
+- Cache trạng thái license có thời hạn ngắn; nếu máy chủ không phản hồi thì **từ chối tạo bài** (fail-closed) thay vì cho tạo không giới hạn.
+- Máy chủ license: giới hạn tần suất gọi (rate limit) theo IP/key, không bao giờ trả danh sách key, bảo vệ `license-admin.php` bằng đăng nhập + 2FA, chuyển `licenses.json` sang database và đặt ngoài thư mục web công khai.
+- Chấp nhận rằng plugin PHP có thể bị sửa mã: mục tiêu là để việc vượt giới hạn **không đem lại lợi ích**, vì quota thật chỉ cấp ở máy chủ.
+
+### 12.7. Cập nhật tự động
+
+- Manifest cập nhật và gói ZIP phải được ký; plugin kiểm tra chữ ký + SHA-256 trước khi cài đặt.
+- Chỉ tải gói từ domain cố định của nhà phát hành; không cho người dùng thay URL manifest bằng giao diện.
+- Ghi nhớ phiên bản trước để có thể rollback.
+
+### 12.8. Queue, cron và chống lạm dụng
+
+- Khóa queue nguyên tử (ví dụ `add_option` trả về false nếu đã tồn tại, hoặc `GET_LOCK` MySQL) để không chạy song song làm tạo bài trùng và tiêu thụ quota hai lần.
+- Lưu `author_id` của người tạo vào từng mục queue, không dùng `get_current_user_id()` trong cron (trả về 0).
+- Giới hạn số tác vụ mỗi lượt cron và số lần retry để tránh tốn chi phí OpenAI vô hạn khi lỗi lặp lại.
+
+### 12.9. Nhật ký và xử lý lỗi
+
+- Ghi nhật ký các sự kiện: kích hoạt/hủy license, thay đổi API key, thao tác hàng loạt, lỗi gọi API. Không ghi giá trị bí mật vào log.
+- Thông báo lỗi ra giao diện ngắn gọn; không hiển thị nguyên văn phản hồi API hoặc stack trace.
+- Chặn truy cập file trực tiếp: mỗi file PHP bắt đầu bằng `defined( 'ABSPATH' ) || exit;`; thêm `index.php` rỗng trong các thư mục con.
+
+### 12.10. Checklist trước khi phát hành
+
+- [ ] `php -l` toàn bộ file; chạy PHPCS với bộ quy tắc `WordPress-Extra` + `WordPress.Security`.
+- [ ] Kiểm tra mọi handler AJAX/REST có capability + nonce.
+- [ ] Không còn API key, token, `licenses.json`, file `.env` hay dữ liệu khách hàng trong ZIP.
+- [ ] Thử vượt giới hạn Free: đổi ngày hệ thống, sửa option `abcgs_license`, gọi lại API license với phản hồi giả; máy chủ phải từ chối.
+- [ ] Thử nội dung AI chứa `<script>` / link `javascript:`; phải bị lọc.
+- [ ] Gỡ plugin trên staging; xác nhận dữ liệu bí mật đã bị xóa.
+
+## 13. Khuyến nghị phát triển tiếp
 
 1. Hợp nhất v6.1.1 caption/ALT vào nhánh suite sau khi so sánh mã, không ghi đè mù.
 2. Xây dựng khóa queue nguyên tử, idempotency key cho mỗi từ khóa/bài và cơ chế retry theo giai đoạn.
@@ -175,7 +250,7 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 7. Xác minh manifest cập nhật và chữ ký/hash ZIP; lưu bản backup/rollback.
 8. Viết test cho: tạo bài, tạo ảnh, caption/ALT, đa ngôn ngữ, cron, license, SEO và migration phiên bản.
 
-## 13. Danh sách mã nguồn đã đối chiếu
+## 14. Danh sách mã nguồn đã đối chiếu
 
 | Tệp | Ghi chú |
 |---|---|
@@ -204,7 +279,7 @@ Giữ ba nhóm quản trị trên và bổ sung các trang riêng cho 8 module t
 | `license-admin.php` / `license-api.php` / `licenses.json` | Thành phần máy chủ license, tách biệt plugin WordPress |
 | `license-admin-100-posts-update.zip` | Gói cập nhật thêm gói 100 bài |
 
-## 14. Quy tắc bảo trì và phát hành
+## 15. Quy tắc bảo trì và phát hành
 
 - Luôn lấy đúng bản ZIP làm nguồn trước khi chỉnh sửa, kiểm tra các nhánh thay đổi độc lập.
 - Nâng `Version` trong header, đóng gói đúng tên thư mục plugin, kiểm tra `php -l` cho tất cả PHP.
