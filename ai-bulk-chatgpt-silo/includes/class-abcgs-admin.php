@@ -37,6 +37,7 @@ class ABCGS_Admin {
 			add_action( 'admin_post_' . $action, array( __CLASS__, $method ) );
 		}
 		add_action( 'wp_ajax_abcgs_process_next_image', array( __CLASS__, 'ajax_process_next_image' ) );
+		add_action( 'wp_ajax_abcgs_process_next_post', array( __CLASS__, 'ajax_process_next_post' ) );
 	}
 
 	public static function menu() {
@@ -273,6 +274,15 @@ class ABCGS_Admin {
 			case 'clear':
 				ABCGS_Notices::add( 'Đã dọn ' . ABCGS_Queue::clear_finished() . ' mục đã xong/đã hủy.' );
 				break;
+			case 'unlock':
+				// Chỉ mở khi có mục kẹt ở bước gọi API quá 5 phút: tiến trình giữ khóa đã chết.
+				if ( ABCGS_Queue::stalled() ) {
+					ABCGS_Lock::release( 'queue' );
+					ABCGS_Notices::add( 'Đã mở khóa queue. Bấm "Viết liên tục" để chạy lại mục bị kẹt.' );
+				} else {
+					ABCGS_Notices::add( 'Queue không bị kẹt, chưa mở khóa.', 'info' );
+				}
+				break;
 			case 'run':
 				if ( ABCGS_Lock::is_locked( 'queue' ) ) {
 					ABCGS_Notices::add( 'Queue đang được xử lý ở tiến trình khác.', 'info' );
@@ -503,6 +513,38 @@ class ABCGS_Admin {
 				break;
 		}
 		self::back( $back );
+	}
+
+	/**
+	 * Viết 1 bài ngay trong yêu cầu AJAX của trình duyệt. Dùng khi WP-Cron bị
+	 * máy chủ web dừng giữa chừng (LiteSpeed không bật noabort, cron chập chờn).
+	 */
+	public static function ajax_process_next_post() {
+		check_ajax_referer( 'abcgs_post_worker', 'nonce' );
+		if ( ! current_user_can( self::CAP ) ) {
+			wp_send_json_error( array( 'message' => 'Không có quyền.' ), 403 );
+		}
+		if ( function_exists( 'ignore_user_abort' ) ) {
+			ignore_user_abort( true );
+		}
+		$ran    = ABCGS_Queue::process( 0 );
+		$counts = ABCGS_Queue::counts();
+		$last   = '';
+		foreach ( ABCGS_Queue::items() as $item ) {
+			if ( 'error' === ( $item['status'] ?? '' ) ) {
+				$last = (string) ( $item['content_status'] ?? '' );
+			}
+		}
+		wp_send_json_success(
+			array(
+				'busy'       => ! $ran,
+				'due'        => ABCGS_Queue::due_count(),
+				'pending'    => $counts['pending'] + $counts['waiting_quota'],
+				'done'       => $counts['done'],
+				'errors'     => $counts['error'],
+				'last_error' => $last,
+			)
+		);
 	}
 
 	public static function ajax_process_next_image() {

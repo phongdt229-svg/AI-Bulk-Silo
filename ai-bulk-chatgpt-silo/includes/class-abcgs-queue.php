@@ -18,6 +18,9 @@ class ABCGS_Queue {
 
 	const MAX_KEYWORDS_PER_BATCH = 200;
 
+	// Thời gian tối đa một lượt cron còn được bắt đầu bài mới.
+	const BATCH_SECONDS = 120;
+
 	const ACTIVE = array( 'pending', 'waiting_quota' );
 
 	public static function items() {
@@ -38,6 +41,34 @@ class ABCGS_Queue {
 			'done'          => 'Xong',
 			'cancelled'     => 'Đã hủy',
 		);
+	}
+
+	/**
+	 * Có mục kẹt ở bước gọi API quá $seconds giây (tiến trình có thể đã bị dừng).
+	 */
+	public static function stalled( $seconds = 300 ) {
+		foreach ( self::items() as $item ) {
+			$started = intval( $item['api_started_at'] ?? 0 );
+			if ( 'pending' === ( $item['status'] ?? '' ) && $started && time() - $started > $seconds
+				&& 0 === strpos( (string) ( $item['content_status'] ?? '' ), 'Đang gọi API' ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Số mục đang chờ và đã tới lượt chạy.
+	 */
+	public static function due_count() {
+		$now = time();
+		$n   = 0;
+		foreach ( self::items() as $item ) {
+			if ( in_array( $item['status'] ?? '', self::ACTIVE, true ) && intval( $item['next_attempt'] ?? 0 ) <= $now ) {
+				$n++;
+			}
+		}
+		return $n;
 	}
 
 	public static function counts() {
@@ -141,22 +172,33 @@ class ABCGS_Queue {
 	}
 
 	/**
-	 * Callback cron: xử lý 1 mục.
+	 * Callback cron (và AJAX): xử lý các mục tới lượt.
+	 *
+	 * @param int $budget Còn bắt đầu bài mới khi lượt này chưa quá số giây này; 0 = chỉ 1 bài.
+	 * @return bool false nếu tiến trình khác đang giữ queue.
 	 */
-	public static function process() {
+	public static function process( $budget = self::BATCH_SECONDS ) {
 		if ( ! ABCGS_Lock::acquire( 'queue', 15 * MINUTE_IN_SECONDS ) ) {
-			return;
+			return false;
 		}
 		try {
-			if ( function_exists( 'set_time_limit' ) ) {
-				@set_time_limit( 300 );
-			}
-			self::process_one();
-			self::finalize_batches();
+			// Viết liên tiếp nhiều bài trong một lượt cron để không phải chờ lượt
+			// truy cập kế tiếp mới chạy bài sau. Chỉ bắt đầu bài mới khi lượt này
+			// chưa quá BATCH_SECONDS; một bài tối đa khoảng 5 phút nên tổng thời
+			// gian vẫn dưới thời hạn khóa 15 phút.
+			$started = time();
+			do {
+				if ( function_exists( 'set_time_limit' ) ) {
+					@set_time_limit( 300 );
+				}
+				$did = self::process_one();
+				self::finalize_batches();
+			} while ( $did && time() - $started < intval( $budget ) );
 		} finally {
 			ABCGS_Lock::release( 'queue' );
 			self::schedule_next();
 		}
+		return true;
 	}
 
 	private static function next_item() {
@@ -169,10 +211,13 @@ class ABCGS_Queue {
 		return null;
 	}
 
+	/**
+	 * @return bool Có xử lý một mục hay không (false khi không còn mục nào tới lượt).
+	 */
 	private static function process_one() {
 		$item = self::next_item();
 		if ( ! $item ) {
-			return;
+			return false;
 		}
 		$batch = self::batches()[ $item['batch_id'] ?? '' ] ?? array();
 		$s     = wp_parse_args( (array) ( $batch['settings'] ?? array() ), ABCGS_Settings::get() );
@@ -181,20 +226,21 @@ class ABCGS_Queue {
 		if ( 'content' === $stage ) {
 			$item = self::stage_content( $item, $s );
 			if ( ! $item ) {
-				return;
+				return true;
 			}
 			$stage = 'consume';
 		}
 		if ( 'consume' === $stage ) {
 			$item = self::stage_consume( $item );
 			if ( ! $item ) {
-				return;
+				return true;
 			}
 			$stage = 'insert';
 		}
 		if ( 'insert' === $stage ) {
 			self::stage_insert( $item, $s, $batch );
 		}
+		return true;
 	}
 
 	private static function fail( $item, $message ) {
@@ -249,6 +295,7 @@ class ABCGS_Queue {
 			array(
 				'status'         => 'pending',
 				'content_status' => 'Đang gọi API (' . $model . ', ' . strtoupper( $language ) . ')...',
+				'api_started_at' => time(),
 			)
 		) ) {
 			return null;

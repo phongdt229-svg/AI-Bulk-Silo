@@ -167,10 +167,15 @@ Khóa Học SEO Fame Media
 			<?php wp_nonce_field( 'abcgs_queue_action' ); ?>
 			<p>
 				<?php if ( $active ) : ?>
-					<button class="button" name="op" value="run|">Xử lý ngay 1 bài</button>
+					<button type="button" id="abcgs-run-posts" class="button button-primary">Viết liên tục (giữ trang mở)</button>
+					<?php if ( $running && ABCGS_Queue::stalled() ) : ?>
+						<button class="button" name="op" value="unlock|">Mở khóa queue bị kẹt</button>
+					<?php endif; ?>
+					<button class="button" name="op" value="run|">Xử lý ngay</button>
 					<button class="button" name="op" value="cancel_all|">Hủy tất cả mục đang chờ</button>
 				<?php endif; ?>
 				<button class="button" name="op" value="clear|">Dọn mục đã xong / đã hủy</button>
+				<span id="abcgs-post-progress" style="margin-left:8px"></span>
 			</p>
 			<table class="widefat striped">
 				<thead>
@@ -194,7 +199,22 @@ Khóa Học SEO Fame Media
 							<?php endif; ?>
 						</td>
 						<td><?php echo esc_html( $labels[ $status ] ?? $status ); ?></td>
-						<td><?php echo esc_html( $item['content_status'] ?? '' ); ?></td>
+						<td>
+							<?php echo esc_html( $item['content_status'] ?? '' ); ?>
+							<?php
+							$api_started = intval( $item['api_started_at'] ?? 0 );
+							if ( 'pending' === $status && $api_started && 0 === strpos( (string) ( $item['content_status'] ?? '' ), 'Đang gọi API' ) ) :
+								$waited = max( 0, time() - $api_started );
+								?>
+								<br><small>Đã chờ <?php echo intval( $waited ); ?> giây.
+								<?php if ( $waited > 5 * MINUTE_IN_SECONDS && ! $running ) : ?>
+									Tiến trình có thể đã bị máy chủ dừng giữa chừng; queue sẽ tự chạy lại mục này khi khóa hết hạn (tối đa 15 phút).
+								<?php else : ?>
+									Một bài khoảng <?php echo intval( $s['post_length'] ); ?> từ thường mất 1 đến 2 phút.
+								<?php endif; ?>
+								</small>
+							<?php endif; ?>
+						</td>
 						<td>
 							<?php if ( in_array( $status, array( 'error', 'cancelled', 'waiting_quota' ), true ) && empty( $post_id ) ) : ?>
 								<button class="button button-small" name="op" value="<?php echo esc_attr( 'retry|' . $id ); ?>">Thử lại</button>
@@ -212,3 +232,51 @@ Khóa Học SEO Fame Media
 		<p>Queue đang trống.</p>
 	<?php endif; ?>
 </div>
+<?php if ( $active ) : ?>
+<script>
+(function () {
+	var btn = document.getElementById('abcgs-run-posts');
+	var out = document.getElementById('abcgs-post-progress');
+	var nonce = <?php echo wp_json_encode( wp_create_nonce( 'abcgs_post_worker' ) ); ?>;
+	var ajax = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
+	var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+	if (!btn) { return; }
+	btn.addEventListener('click', async function () {
+		btn.disabled = true;
+		window.abcgsWorking = true;
+		out.textContent = 'Đang viết bài, giữ trang này mở...';
+		var due = 1;
+		while (due > 0) {
+			try {
+				var body = new URLSearchParams({ action: 'abcgs_process_next_post', nonce: nonce });
+				var res = await fetch(ajax, { method: 'POST', body: body, credentials: 'same-origin' });
+				var json = await res.json();
+				if (!json.success) { throw new Error((json.data && json.data.message) || 'AJAX thất bại'); }
+				var d = json.data;
+				due = Number(d.due) || 0;
+				out.textContent = 'Xong: ' + d.done + ' | Chờ: ' + d.pending + ' | Lỗi: ' + d.errors
+					+ (d.busy ? ' | Tiến trình khác đang giữ queue, chờ...' : '')
+					+ (d.last_error ? ' | Lỗi gần nhất: ' + d.last_error : '');
+				if (d.busy) { await wait(5000); }
+			} catch (e) {
+				out.textContent = 'Dừng: ' + e.message;
+				window.abcgsWorking = false;
+				btn.disabled = false;
+				return;
+			}
+		}
+		location.reload();
+	});
+})();
+// Tải lại trang để xem tiến độ (mỗi lượt tải cũng kích WP-Cron chạy tiếp).
+// Không tải lại khi đang nhập từ khóa hoặc đang chạy "Viết liên tục".
+setInterval(function () {
+	if (window.abcgsWorking) { return; }
+	var kw = document.querySelector('textarea[name="abcgs_keywords"]');
+	if (kw && kw.value.trim() !== '') { return; }
+	if (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) { return; }
+	if (document.hidden) { return; }
+	location.reload();
+}, 20000);
+</script>
+<?php endif; ?>
